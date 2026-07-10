@@ -1,0 +1,305 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Klasifikasi Katarak - VGG</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 20px;
+            background: #f4f7fc;
+            text-align: center;
+        }
+        .container {
+            max-width: 700px;
+            margin: auto;
+            background: white;
+            padding: 25px;
+            border-radius: 16px;
+            box-shadow: 0 8px 20px rgba(0,0,0,0.1);
+        }
+        .btn-group {
+            display: flex;
+            flex-wrap: wrap;
+            justify-content: center;
+            gap: 12px;
+            margin: 15px 0;
+        }
+        button {
+            background: #007bff;
+            color: white;
+            border: none;
+            padding: 10px 24px;
+            border-radius: 8px;
+            font-size: 15px;
+            cursor: pointer;
+        }
+        button:hover {
+            background: #0056b3;
+        }
+        button.secondary {
+            background: #6c757d;
+        }
+        button.secondary:hover {
+            background: #5a6268;
+        }
+        button.danger {
+            background: #dc3545;
+        }
+        button.danger:hover {
+            background: #b02a37;
+        }
+        video, .preview {
+            max-width: 100%;
+            max-height: 400px;
+            border-radius: 12px;
+            border: 1px solid #ddd;
+            margin: 10px 0;
+            background: #000;
+        }
+        .preview {
+            max-height: 300px;
+        }
+        .result {
+            margin-top: 20px;
+            font-size: 18px;
+        }
+        .label {
+            font-weight: bold;
+            color: #333;
+        }
+        .confidence {
+            color: #28a745;
+        }
+        .error {
+            color: #dc3545;
+        }
+        #previewContainer {
+            margin: 10px 0;
+        }
+        #cameraContainer {
+            position: relative;
+            display: inline-block;
+        }
+        #cameraContainer video {
+            display: block;
+        }
+        #cameraContainer .overlay {
+            position: absolute;
+            bottom: 10px;
+            left: 0;
+            right: 0;
+            text-align: center;
+        }
+        .hidden {
+            display: none !important;
+        }
+        .flex-center {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            gap: 10px;
+            flex-wrap: wrap;
+        }
+        .file-input-wrapper {
+            display: inline-block;
+            position: relative;
+        }
+        .file-input-wrapper input[type="file"] {
+            position: absolute;
+            left: 0;
+            top: 0;
+            opacity: 0;
+            width: 100%;
+            height: 100%;
+            cursor: pointer;
+        }
+        .file-input-wrapper button {
+            pointer-events: none;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h2>🔬 Deteksi Katarak</h2>
+        <p>Unggah gambar atau gunakan kamera</p>
+
+        <!-- Tombol aksi -->
+        <div class="btn-group">
+            <!-- Upload file -->
+            <div class="file-input-wrapper">
+                <button class="secondary">📁 Pilih Gambar</button>
+                <input type="file" id="fileInput" accept="image/*" />
+            </div>
+            <button id="btnCamera" class="secondary">📷 Buka Kamera</button>
+            <button id="btnCapture" class="hidden success">📸 Ambil Foto</button>
+            <button id="btnCloseCamera" class="hidden danger">❌ Tutup Kamera</button>
+        </div>
+
+        <!-- Area preview / kamera -->
+        <div id="cameraContainer" class="hidden">
+            <video id="video" autoplay playsinline></video>
+        </div>
+        <div id="previewContainer"></div>
+
+        <!-- Tombol prediksi -->
+        <button id="btnPredict" class="hidden" style="margin-top:10px;">🔍 Prediksi</button>
+
+        <!-- Hasil -->
+        <div id="result" class="result"></div>
+    </div>
+
+    <script>
+        (function() {
+            // DOM elements
+            const fileInput = document.getElementById('fileInput');
+            const btnCamera = document.getElementById('btnCamera');
+            const btnCapture = document.getElementById('btnCapture');
+            const btnCloseCamera = document.getElementById('btnCloseCamera');
+            const btnPredict = document.getElementById('btnPredict');
+            const video = document.getElementById('video');
+            const cameraContainer = document.getElementById('cameraContainer');
+            const previewContainer = document.getElementById('previewContainer');
+            const resultDiv = document.getElementById('result');
+
+            let stream = null;
+            let currentImageFile = null; // File object untuk dikirim
+
+            // --- Fungsi prediksi ---
+            async function predict(file) {
+                if (!file) {
+                    resultDiv.innerHTML = '<span class="error">Tidak ada gambar untuk diprediksi.</span>';
+                    return;
+                }
+                const formData = new FormData();
+                formData.append('file', file);
+
+                resultDiv.innerHTML = '⏳ Memproses...';
+                try {
+                    const response = await fetch('/predict', {
+                        method: 'POST',
+                        body: formData
+                    });
+                    const data = await response.json();
+                    if (response.ok) {
+                        const label = data.label;
+                        const conf = (data.confidence * 100).toFixed(2);
+                        resultDiv.innerHTML = `
+                            <div class="label">Hasil: ${label}</div>
+                            <div class="confidence">Keyakinan: ${conf}%</div>
+                            <div style="margin-top:10px; font-size:14px; color:#555;">
+                                Probabilitas: Cataract ${(data.probabilities.Cataract * 100).toFixed(2)}% | 
+                                Normal ${(data.probabilities.Normal * 100).toFixed(2)}%
+                            </div>
+                        `;
+                    } else {
+                        resultDiv.innerHTML = `<span class="error">Error: ${data.error}</span>`;
+                    }
+                } catch (err) {
+                    resultDiv.innerHTML = `<span class="error">Terjadi kesalahan: ${err.message}</span>`;
+                }
+            }
+
+            // --- Upload file ---
+            fileInput.addEventListener('change', function(e) {
+                const file = this.files[0];
+                if (!file) return;
+                // Tampilkan preview
+                const reader = new FileReader();
+                reader.onload = function(ev) {
+                    previewContainer.innerHTML = `<img src="${ev.target.result}" class="preview" alt="Preview">`;
+                };
+                reader.readAsDataURL(file);
+
+                // Tutup kamera jika aktif
+                closeCamera();
+
+                currentImageFile = file;
+                btnPredict.classList.remove('hidden');
+                resultDiv.innerHTML = '';
+            });
+
+            // --- Buka kamera ---
+            btnCamera.addEventListener('click', async function() {
+                if (stream) {
+                    // Jika sudah aktif, jangan buka lagi
+                    return;
+                }
+                try {
+                    stream = await navigator.mediaDevices.getUserMedia({
+                        video: { facingMode: 'environment', width: { ideal: 640 }, height: { ideal: 480 } }
+                    });
+                    video.srcObject = stream;
+                    await video.play();
+                    cameraContainer.classList.remove('hidden');
+                    btnCamera.classList.add('hidden');
+                    btnCapture.classList.remove('hidden');
+                    btnCloseCamera.classList.remove('hidden');
+                    // Sembunyikan preview lama
+                    previewContainer.innerHTML = '';
+                    btnPredict.classList.add('hidden');
+                    resultDiv.innerHTML = '';
+                } catch (err) {
+                    alert('Gagal mengakses kamera: ' + err.message);
+                }
+            });
+
+            // --- Tutup kamera ---
+            function closeCamera() {
+                if (stream) {
+                    stream.getTracks().forEach(track => track.stop());
+                    stream = null;
+                }
+                video.srcObject = null;
+                cameraContainer.classList.add('hidden');
+                btnCamera.classList.remove('hidden');
+                btnCapture.classList.add('hidden');
+                btnCloseCamera.classList.add('hidden');
+            }
+
+            btnCloseCamera.addEventListener('click', closeCamera);
+
+            // --- Ambil foto dari kamera ---
+            btnCapture.addEventListener('click', function() {
+                if (!stream) return;
+                // Buat canvas dengan ukuran video
+                const canvas = document.createElement('canvas');
+                canvas.width = video.videoWidth || 640;
+                canvas.height = video.videoHeight || 480;
+                const ctx = canvas.getContext('2d');
+                ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+                // Tampilkan preview
+                const dataUrl = canvas.toDataURL('image/jpeg', 0.9);
+                previewContainer.innerHTML = `<img src="${dataUrl}" class="preview" alt="Capture">`;
+
+                // Konversi ke File
+                canvas.toBlob(function(blob) {
+                    const file = new File([blob], 'capture.jpg', { type: 'image/jpeg' });
+                    currentImageFile = file;
+                    btnPredict.classList.remove('hidden');
+                    resultDiv.innerHTML = '';
+                }, 'image/jpeg', 0.9);
+
+                // Tutup kamera otomatis (opsional)
+                // closeCamera(); // jika ingin otomatis tutup setelah capture, uncomment
+            });
+
+            // --- Prediksi dari tombol ---
+            btnPredict.addEventListener('click', function() {
+                if (currentImageFile) {
+                    predict(currentImageFile);
+                } else {
+                    resultDiv.innerHTML = '<span class="error">Tidak ada gambar.</span>';
+                }
+            });
+
+            // --- Shortcut: tekan Enter di input file? tidak perlu.
+
+            // Jika pengguna memilih file, otomatis prediksi? Bisa ditambahkan:
+            // Tapi kita biarkan manual.
+
+        })();
+    </script>
+</body>
+</html>
